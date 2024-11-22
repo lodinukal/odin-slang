@@ -1,10 +1,9 @@
 package slang
 
 import "core:c"
-import win32 "core:sys/windows" // TODO(Dragos): use something cross platform. maybe a "core:sys/com" would be useful
-import "vendor:directx/dxgi"
 
 foreign import libslang "lib/slang.lib"
+foreign import libslangrt "lib/slang-rt.lib"
 
 // Note(Dragos): This is defined to be "pointer size". So ummmm check later
 Int :: int
@@ -14,7 +13,7 @@ Result :: i32
 
 API_VERSION :: 0
 
-IUnknown_UUID := dxgi.IID{0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
+IUnknown_UUID := UUID{0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}}
 
 
 PassThrough :: enum i32 {
@@ -329,6 +328,12 @@ CompilerOptionValueKind :: enum {
 	String,
 }
 
+CompileCoreModuleFlag :: enum u32 {
+	WriteDocumentation = 0x1,
+}
+
+CompileCoreModuleFlags :: bit_set[CompileCoreModuleFlag; u32]
+
 FAILED :: #force_inline proc "contextless"(#any_int status: int) -> bool { return status < 0 }
 SUCCEEDED :: #force_inline proc "contextless"(#any_int status: int) -> bool { return status >= 0 }
 // Note(Dragos): is Result the correct type for these?
@@ -387,65 +392,530 @@ CompilerOptionEntry :: struct {
 }
 
 IUnknown_VTable :: struct {
-	QueryInterface: proc "stdcall" (this: ^IUnknown, riid: ^dxgi.IID, ppvObject: ^rawptr) -> Result,
-	AddRef:         proc "stdcall" (this: ^IUnknown) -> u32,
-	Release:        proc "stdcall" (this: ^IUnknown) -> u32,
+	
 }
 
+UUID :: struct {
+	data1: u32,
+	data2: u16,
+	data3: u16,
+	data4: [8]u8,
+}
 
 IUnknown :: struct {
-	using vtable: ^IUnknown_VTable,
+	using vtable: ^struct {
+		queryInterface: proc "stdcall" (this: ^IUnknown, #by_ptr uuid: UUID, outObject: ^rawptr) -> Result,
+		addRef:         proc "stdcall" (this: ^IUnknown) -> u32,
+		release:        proc "stdcall" (this: ^IUnknown) -> u32,
+	},
 }
 
-IGlobalSession_VTable :: struct {
-	createSession: proc "stdcall" (#by_ptr desc: SessionDesc, outSession: ^^ISession) -> Result,
+ICastable :: struct #raw_union {
+	#subtype iunknown: IUnknown,
+	using vtable: ^struct {
+		castAs: proc "stdcall" (this: ^ICastable, #by_ptr guid: UUID) -> rawptr,
+	},
+}
 
+IClonable :: struct #raw_union {
+	#subtype icastable: ICastable,
+	using vtable: ^struct {
+		clone: proc "stdcall" (this: ^IClonable, #by_ptr guid: UUID) -> rawptr,
+	},
 }
 
 IBlob :: struct #raw_union {
-
+	#subtype iunknown: IUnknown,
+	using vtable: ^struct {
+		getBufferPointer: proc "stdcall"(this: ^IBlob) -> rawptr,
+		getBufferSize   : proc "stdcall"(this: ^IBlob) -> uint,
+	},
 }
 
-ICompilerRequest :: struct #raw_union {
+IFileSystem :: struct #raw_union {
+	#subtype icastable: ICastable,
+	using vtable: ^struct {
+		loadFile: proc "stdcall"(this: ^IFileSystem, path: cstring) -> Result,
+	}
+}
 
+// Todo(Dragos): Should this be a rawptr?
+FuncPtr :: #type proc "c"()
+
+// TODO(Dragos): findFuncByName is a FORCE_INLINE with no stdcall calconv. Does that mean it's not part of the COM interface?
+ISharedLibrary :: struct #raw_union {
+	#subtype icastable: ICastable,
+	using vtable: ^struct {
+		findSymbolByName: proc "stdcall" (this: ^IFileSystem, name: cstring) -> rawptr,
+	},
 }
 
 ISharedLibraryLoader :: struct #raw_union {
-
-}
-
-IGlobalSession :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
-		createSession: proc "stdcall"(#by_ptr desc: SessionDesc, outSession: ^^ISession) -> Result,
-		findProfile: proc "stdcall"(name: cstring) -> ProfileID,
-		setDownstreamCompierPath: proc "stdcall"(passThrough: PassThrough, path: cstring),
-		setDownstreamCompilerPrelude: proc "stdcall"(passThrough: PassThrough, preduleText: cstring),
-		getDownstreamCompilerPrelude: proc "stdcall"(passThrough: PassThrough, outPrelude: ^^IBlob),
-		getBuildTagString: proc "stdcall"() -> cstring,
-		setDefaultDownstreamCompiler: proc "stdcall"(sourceLanguage: SourceLanguage, defaultCompiler: PassThrough) -> Result,
-		getDefaultDownstreamCompiler: proc "stdcall"(sourceLanguage: SourceLanguage) -> PassThrough,
-		setLanguagePrelude: proc "stdcall"(sourceLanguage: SourceLanguage, preludeText: cstring),
-		getLanguagePrelude: proc "stdcall"(sourceLanguage: SourceLanguage, outPrelude: ^^IBlob),
-		/* [deprecated] */ createCompilerRequest: proc "stdcall"(outCompilerRequest: ^^ICompilerRequest) -> Result,
-		addBuiltins: proc "stdcall"(sourcePath: cstring, sourceString: cstring),
-		setSharedLibraryLoader: proc "stdcall"(loader: ^ISharedLibraryLoader),
-		getSharedLibraryLoader: proc "stdcall"() -> ^ISharedLibraryLoader,
-		checkCompileTargetSupport: proc "stdcall"(target: CompileTarget) -> Result,
+		loadSharedLibrary: proc "stdcall" (this: ^ISharedLibraryLoader, path: cstring, sharedLibraryOut: ^^ISharedLibrary) -> Result,
 	},
 }
+
+PathType :: enum u32 {
+	DIRECTORY,
+	FILE,
+}
+
+FileSystemContentsCallback :: #type proc(pathType: PathType, name: cstring, userData: rawptr)
+
+OSPathKind :: enum u8 {
+	None,
+	Direct,
+	OperatingSystem,
+}
+
+PathKind :: enum {
+	Simplified,
+	Canonical,
+	Display,
+	OperatingSystem,
+}
+
+// TODO(Dragos): should we replace #subtype with using?
+IFileSystemExt :: struct #raw_union {
+	#subtype ifilesystem: IFileSystem,
+	using vtable: ^struct {
+		getFileUniqueIdentity: proc "stdcall"(this: ^IFileSystemExt, path: cstring, outUniqueIdentity: ^^IBlob) -> Result,
+		calcCombinedPath     : proc "stdcall"(this: ^IFileSystemExt, fromPath, path: cstring, pathOut: ^^IBlob) -> Result,
+		getPathType          : proc "stdcall"(this: ^IFileSystemExt, path: cstring, pathTypeOut: ^PathType) -> Result,
+		getPath              : proc "stdcall"(this: ^IFileSystemExt, path: cstring, outPath: ^^IBlob) -> Result,
+		enumeratePathContents: proc "stdcall"(this: ^IFileSystemExt, path: cstring, callback: FileSystemContentsCallback, userData: rawptr) -> Result,
+		getOSPathKind        : proc "stdcall"(this: ^IFileSystemExt) -> OSPathKind,
+	},
+}
+
+IMutableFileSystem :: struct #raw_union {
+	#subtype ifilesystext: IFileSystemExt,
+	using vtable: ^struct {
+		saveFile       : proc "stdcall"(this: ^IMutableFileSystem, path: cstring, data: rawptr, size: uint) -> Result,
+		saveFileBlob   : proc "stdcall"(this: ^IMutableFileSystem, path: cstring, dataBlob: ^IBlob) -> Result,
+		remove         : proc "stdcall"(this: ^IMutableFileSystem, path: cstring) -> Result,
+		createDirectory: proc "stdcall"(this: ^IMutableFileSystem, path: cstring) -> Result,
+	},
+}
+
+WriterChannel :: enum u32 {
+	DIAGNOSTIC,
+	STD_OUTPUT,
+	STD_ERROR,
+}
+
+WriterMode :: enum u32 {
+	TEXT,
+	BINARY,
+}
+
+IWriter :: struct #raw_union {
+	#subtype iunknown: IUnknown,
+	using vtable: ^struct {
+		beginAppendBuffer: proc "stdcall"(this: ^IWriter, maxNumChars: uint) -> [^]byte,
+		endAppendBuffer  : proc "stdcall"(this: ^IWriter, buffer: [^]byte, numChars: uint) -> Result,
+		write            : proc "stdcall"(this: ^IWriter, chars: [^]byte, numChars: uint) -> Result,
+		flush            : proc "stdcall"(this: ^IWriter),
+		isConsole        : proc "stdcall"(this: ^IWriter) -> Bool,
+		setMode          : proc "stdcall"(this: ^IWriter, mode: WriterMode) -> Result,
+	},
+}
+
+IProfiler :: struct #raw_union {
+	#subtype iunknown: IUnknown,
+	using vtable: ^struct {
+		getEntryCount: proc "stdcall"(this: ^IProfiler) -> uint,
+		getEntryName: proc "stdcall"(this: ^IProfiler, index: u32) -> cstring,
+		getEntryTimeMS: proc "stdcall"(this: ^IProfiler, index: u32) -> c.long,
+		getEntryInvocationTimes: proc "stdcall"(this: ^IProfiler, index: u32) -> u32,
+	},
+}
+
+DiagnosticsCallback :: #type proc "c"(message: cstring, userData: rawptr)
+
+
+
+
+ProgramLayout :: struct {
+
+}
+
+FunctionReflection :: struct {
+
+}
+
+DeclReflection :: struct {
+	
+}
+
+IComponentType :: struct #raw_union {
+	#subtype iunknown: ^IUnknown,
+	using vtable: ^struct {
+		getSession                 : proc "stdcall"(this: ^IComponentType) -> ^ISession,
+		getLayout                  : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outDiagnostics: ^^IBlob) -> ^ProgramLayout,
+		getSpecializationParamCount: proc "stdcall"(this: ^IComponentType) -> Int,
+		getEntryPointCode          : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
+		getResultAsFileSystem      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outFileSystem: ^^IMutableFileSystem) -> Result,
+		getEntryPointHash          : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: Int, outHash: ^^IBlob),
+		specialize                 : proc "stdcall"(this: ^IComponentType, specializationArgs: [^]SpecializationArg, specializationArgCount: Int, outSpecializedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+		link                       : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+		getEntryPointHostCallable  : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: i32, outSharedLibrary: ^^ISharedLibrary, outDiagnostics: ^^IBlob) -> Result,
+		renameEntryPoint           : proc "stdcall"(this: ^IComponentType, newName: cstring, outEntryPoint: ^^IComponentType) -> Result,
+		linkWithOptions            : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, compilerOptionEntryCount: u32, compilerOptionEntries: [^]CompilerOptionEntry, outDiagnostics: ^^IBlob) -> Result,
+		getTargetCode              : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
+		getTargetMetadata          : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
+		getEntryPointMetadata      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
+	},
+}
+
+IEntryPoint :: struct #raw_union {
+	#subtype icomponenttype: IComponentType,
+	using vtable: ^struct {
+		getFunctionReflection: proc "stdcall"(this: ^IEntryPoint) -> ^FunctionReflection,
+	},
+}
+
+ITypeConformance :: struct #raw_union {
+	#subtype icomponenttype: IComponentType,
+}
+
+IModule :: struct #raw_union {
+	#subtype icomponenttype: IComponentType,
+	using vtable: ^struct {
+		findEntryPointByName     : proc "stdcall"(this: ^IModule, name: cstring, outEntryPoint: ^^IEntryPoint) -> Result,
+		getDefinedEntryPointCount: proc "stdcall"(this: ^IModule) -> i32,
+		getDefinedEntryPoint     : proc "stdcall"(this: ^IModule, index: i32, outEntryPoint: ^^IEntryPoint) -> Result,
+		serialize                : proc "stdcall"(this: ^IModule, outSerializedBlob: ^^IBlob) -> Result,
+		writeToFile              : proc "stdcall"(this: ^IModule, fileName: cstring) -> Result,
+		getName                  : proc "stdcall"(this: ^IModule) -> cstring,
+		getFilePath              : proc "stdcall"(this: ^IModule) -> cstring,
+		getUNiqueIdentity        : proc "stdcall"(this: ^IModule) -> cstring,
+		findAndCheckEntryPoint   : proc "stdcall"(this: ^IModule, name: cstring, stage: Stage, outEntryPoint: ^^IEntryPoint, outDiagnostics: ^^IBlob) -> Result,
+		getDependencyFileCount   : proc "stdcall"(this: ^IModule) -> i32,
+		getDependencyFilePath    : proc "stdcall"(this: ^IModule, index: i32) -> cstring,
+		getModuleReflection      : proc "stdcall"(this: ^IModule) -> ^DeclReflection,
+	},
+}
+
+SpecializationArgKind :: enum i32 {
+	Unknown,
+	Type,
+}
+
+// TODO(Dragos): implement SpecializationArg::fromType
+SpecializationArg :: struct {
+	kind: SpecializationArgKind,
+	using _: struct #raw_union {
+		type: ^TypeReflection,
+	},
+}
+
 
 SessionDesc :: struct {
 
 }
 
-ISession_VTable :: struct {
+ReflectionGenericArgType :: enum {
+	TYPE,
+	INT,
+	BOOL,
+}
+
+TypeKind :: enum u32 {
+	NONE,
+	STRUCT,
+	ARRAY,
+	MATRIX,
+	VECTOR,
+	SCALAR,
+	CONSTANT_BUFFER,
+	RESOURCE,
+	SAMPLER_STATE,
+	TEXTURE_BUFFER,
+	SHADER_STORAGE_BUFFER,
+	PARAMETER_BLOCK,
+	GENERIC_TYPE_PARAMETER,
+	INTERFACE,
+	OUTPUT_STREAM,
+	MESH_OUTPUT,
+	SPECIALIZED,
+	FEEDBACK,
+	POINTER,
+	DYNAMIC_RESOURCE,
+}
+
+ScalarType :: enum u32 {
+	NONE,
+	VOID,
+	BOOL,
+	INT32,
+	UINT32,
+	INT64,
+	UINT64,
+	FLOAT16,
+	FLOAT32,
+	FLOAT64,
+	INT8,
+	UINT8,
+	INT16,
+	UINT16,
+	INTPTR,
+	UINTPTR,
+}
+
+DeclKind :: enum u32 {
+	UNSUPPORTED_FOR_REFLECTION,
+	STRUCT,
+	FUNC,
+	MODULE,
+	GENERIC,
+	VARIABLE,
+	NAMESPACE,
+}
+
+SlangResourceShape :: enum u32 {
+	BASE_SHAPE_MASK              = 0x0F,
+	NONE                         = 0x00,
+	TEXTURE_1D                   = 0x01,
+	TEXTURE_2D                   = 0x02,
+	TEXTURE_3D                   = 0x03,
+	TEXTURE_CUBE                 = 0x04,
+	TEXTURE_BUFFER               = 0x05,
+	STRUCTURED_BUFFER            = 0x06,
+	BYTE_ADDRESS_BUFFER          = 0x07,
+	RESOURCE_UNKNOWN             = 0x08,
+	ACCELERATION_STRUCTURE       = 0x09,
+	TEXTURE_SUBPASS              = 0x0A,
+	RESOURCE_EXT_SHAPE_MASK      = 0xF0,
+	TEXTURE_FEEDBACK_FLAG        = 0x10,
+	TEXTURE_SHADOW_FLAG          = 0x20,
+	TEXTURE_ARRAY_FLAG           = 0x40,
+	TEXTURE_MULTISAMPLE_FLAG     = 0x80,
+	TEXTURE_1D_ARRAY             = TEXTURE_1D | TEXTURE_ARRAY_FLAG,
+	TEXTURE_2D_ARRAY             = TEXTURE_2D | TEXTURE_ARRAY_FLAG,
+	TEXTURE_CUBE_ARRAY           = TEXTURE_CUBE | TEXTURE_ARRAY_FLAG,
+	TEXTURE_2D_MULTISAMPLE       = TEXTURE_2D | TEXTURE_MULTISAMPLE_FLAG,
+	TEXTURE_2D_MULTISAMPLE_ARRAY = TEXTURE_2D | TEXTURE_MULTISAMPLE_FLAG | TEXTURE_ARRAY_FLAG,
+	TEXTURE_SUBPASS_MULTISAMPLE  = TEXTURE_SUBPASS | TEXTURE_MULTISAMPLE_FLAG,
+}
+
+ResourceAccess :: enum u32 {
+	NONE,
+	READ,
+	READ_WRITE,
+	RASTER_ORDERED,
+	APPEND,
+	CONSUME,
+	WRITE,
+	FEEDBACK,
+	UNKNOWN = 0x7FFFFFFF,
+}
+
+ParameterCategory :: enum u32 {
+	NONE,
+	MIXED,
+	CONSTANT_BUFFER,
+	SHADER_RESOURCE,
+	UNORDERED_ACCESS,
+	VARYING_INPUT,
+	VARYING_OUTPUT,
+	SAMPLER_STATE,
+	UNIFORM,
+	DESCRIPTOR_TABLE_SLOT,
+	SPECIALIZATION_CONSTANT,
+	PUSH_CONSTANT_BUFFER,
+	// HLSL register `space`, Vulkan GLSL `set`
+	REGISTER_SPACE,
+	// TODO: Ellie, Both APIs treat mesh outputs as more or less varying output,
+	// Does it deserve to be represented here??
+	// A parameter whose type is to be specialized by a global generic type argument
+	GENERIC,
+	RAY_PAYLOAD,
+	HIT_ATTRIBUTES,
+	CALLABLE_PAYLOAD,
+	SHADER_RECORD,
+	// An existential type parameter represents a "hole" that
+	// needs to be filled with a concrete type to enable
+	// generation of specialized code.
+	//
+	// Consider this example:
+	//
+	//      struct MyParams
+	//      {
+	//          IMaterial material;
+	//          ILight lights[3];
+	//      };
+	//
+	// This `MyParams` type introduces two existential type parameters:
+	// one for `material` and one for `lights`. Even though `lights`
+	// is an array, it only introduces one type parameter, because
+	// we need to hae a *single* concrete type for all the array
+	// elements to be able to generate specialized code.
+	//
+	EXISTENTIAL_TYPE_PARAM,
+	// An existential object parameter represents a value
+	// that needs to be passed in to provide data for some
+	// interface-type shader paameter.
+	//
+	// Consider this example:
+	//
+	//      struct MyParams
+	//      {
+	//          IMaterial material;
+	//          ILight lights[3];
+	//      };
+	//
+	// This `MyParams` type introduces four existential object parameters:
+	// one for `material` and three for `lights` (one for each array
+	// element). This is consistent with the number of interface-type
+	// "objects" that are being passed through to the shader.
+	//
+	EXISTENTIAL_OBJECT_PARAM,
+	// The register space offset for the sub-elements that occupies register spaces.
+	SUB_ELEMENT_REGISTER_SPACE,
+	// The input_attachment_index subpass occupancy tracker
+	SUBPASS,
+	// Metal tier-1 argument buffer element [[id]].
+	METAL_ARGUMENT_BUFFER_ELEMENT,
+	// Metal [[attribute]] inputs.
+	METAL_ATTRIBUTE,
+	// Metal [[payload]] inputs
+	METAL_PAYLOAD,
+}
+
+BindingType :: enum u32 {
+	UNKNOWN = 0,
+	SAMPLER,
+	TEXTURE,
+	CONSTANT_BUFFER,
+	PARAMETER_BLOCK,
+	TYPED_BUFFER,
+	RAW_BUFFER,
+	COMBINED_TEXTURE_SAMPLER,
+	INPUT_RENDER_TARGET,
+	INLINE_UNIFORM_DATA,
+	RAY_TRACING_ACCELERATION_STRUCTURE,
+	VARYING_INPUT,
+	VARYING_OUTPUT,
+	EXISTENTIAL_VALUE,
+	PUSH_CONSTANT,
+	MUTABLE_FLAG = 0x100,
+
+	// TODO(Dragos): fix typo in main repo SLANG_BINDING_TYPE_MUTABLE_TETURE
+	MUTABLE_TEXTURE = TEXTURE | MUTABLE_FLAG,
+   	MUTABLE_TYPED_BUFFER = TYPED_BUFFER | MUTABLE_FLAG,
+	MUTABLE_RAW_BUFFER = RAW_BUFFER | MUTABLE_FLAG,
+
+	BASE_MASK = 0x00FF,
+	EXT_MASK = 0xFF00,
+}
+
+SlangModifierID :: enum u32 {
+	SHARED,
+	NO_DIFF,
+	STATIC,
+	CONST,
+	EXPORT,
+	EXTERN,
+	DIFFERENTIABLE,
+	MUTATING,
+	IN,
+	OUT,
+	INOUT,
+}
+
+ImageFormat :: u32 {
+	// TODO(Dragos): see slang-image-format-defs.h
+}
+
+UNBOUNDED_SIZE :: ~uint(0)
+
+TypeReflection :: struct {
 
 }
 
+LayoutRules :: enum u32 {
+	DEFAULT,
+	METAL_ARGUMENT_BUFFER_TIER_2,
+}
+
+TypeLayoutReflection :: struct {
+	
+}
+
+ContainerType :: enum {
+	None,
+	UnsizedArray,
+	StructuredBuffer,
+	ConstantBuffer,
+	ParameterBlock,
+}
+
+
 ISession :: struct #raw_union {
 	#subtype iunknown: IUnknown,
-	using vtable: ^ISession_VTable,
+	using vtable: ^struct {
+		getGlobalSession                     : proc "stdcall"(this: ^ISession) -> ^IGlobalSession,
+		loadModule                           : proc "stdcall"(this: ^ISession, moduleName: cstring, outDiagnostics: ^^IBlob) -> ^IModule,
+		loadModuleFromSource                 : proc "stdcall"(this: ^ISession, moduleName: cstring, path: cstring, source: ^IBlob, outDiagnostics: ^^IBlob) -> ^IModule,
+		createCompositeComponentType         : proc "stdcall"(this: ^ISession, componentTypes: [^]^IComponentType, outCompositeComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+		specializeType                       : proc "stdcall"(this: ^ISession, type: ^TypeReflection, specializationArgs: [^]SpecializationArg, specializationArgCount: Int, outDiagnostics: ^^IBlob) -> ^TypeReflection,
+		getTypeLayout                        : proc "stdcall"(this: ^ISession, type: ^TypeReflection, targetIndex: Int, rules: LayoutRules, outDiagnostics: ^^IBlob) -> ^TypeLayoutReflection,
+		getContainerType                     : proc "stdcall"(this: ^ISession, elementType: ^TypeReflection, containerType: ContainerType, outDiagnostics: ^^IBlob) -> ^TypeReflection,
+		getDynamicType                       : proc "stdcall"(this: ^ISession) -> ^TypeReflection,
+		getTypeRTTIMangledName               : proc "stdcall"(this: ^ISession, type: ^TypeReflection, outNameBlob: ^^IBlob) -> Result,
+		getTypeConformanceWitnessMangledName : proc "stdcall"(this: ^ISession, type: ^TypeReflection, interfaceType: ^TypeReflection, outNameBlob: ^^IBlob) -> Result,
+		getTypeConformanceWitnessSequentialID: proc "stdcall"(this: ^ISession, type: ^TypeReflection, interfaceType: ^TypeReflection, outId: ^u32) -> Result,
+		createCompilerRequest                : proc "stdcall"(this: ^ISession, outCompileRequest: ^^ICompileRequest) -> Result,
+		createTypeConformanceComponentType   : proc "stdcall"(this: ^ISession, type: ^TypeReflection, interfaceType: ^TypeReflection, outConformance: ^^ITypeConformance, conformanceIdOverride: Int, outDiagnostics: ^^IBlob) -> Result,
+		loadModuleFromIRBlob                 : proc "stdcall"(this: ^ISession, moduleName: cstring, path: cstring, source: ^IBlob, outDiagnostics: ^^IBlob) -> ^IModule,
+		getLoadedModuleCount                 : proc "stdcall"(this: ^ISession) -> Int,
+		getLoadedModule                      : proc "stdcall"(this: ^ISession, indxe: Int) -> ^IModule,
+		isBinaryModuleUpToDate               : proc "stdcall"(this: ^ISession, modulePath: cstring, binaryModuleBlob: ^IBlob) -> bool,
+		loadModuleFromSourceString           : proc "stdcall"(this: ^ISession, moduleName, path, str: cstring, outDiagnostics: ^^IBlob) -> ^IModule,
+	},
+}
+
+
+IMetadata :: struct #raw_union {
+	#subtype icastable: ICastable,
+	using vtable: ^struct {
+		isParameterLocationUsed: proc "stdcall"(this: ^IMetadata, category: ParameterCategory, spaceIndex, registerIndex: UInt, outUsed: ^bool) -> Result,
+	},
+}
+
+IGlobalSession :: struct #raw_union {
+	#subtype iunknown: IUnknown,
+	using vtable: ^struct {
+		createSession                     : proc "stdcall"(this: ^IGlobalSession, #by_ptr desc: SessionDesc, outSession: ^^ISession) -> Result,
+		findProfile                       : proc "stdcall"(this: ^IGlobalSession, name: cstring) -> ProfileID,
+		setDownstreamCompierPath          : proc "stdcall"(this: ^IGlobalSession, passThrough: PassThrough, path: cstring),
+		setDownstreamCompilerPrelude      : proc "stdcall"(this: ^IGlobalSession, passThrough: PassThrough, preduleText: cstring),
+		getDownstreamCompilerPrelude      : proc "stdcall"(this: ^IGlobalSession, passThrough: PassThrough, outPrelude: ^^IBlob),
+		getBuildTagString                 : proc "stdcall"(this: ^IGlobalSession) -> cstring,
+		setDefaultDownstreamCompiler      : proc "stdcall"(this: ^IGlobalSession, sourceLanguage: SourceLanguage, defaultCompiler: PassThrough) -> Result,
+		getDefaultDownstreamCompiler      : proc "stdcall"(this: ^IGlobalSession, sourceLanguage: SourceLanguage) -> PassThrough,
+		setLanguagePrelude                : proc "stdcall"(this: ^IGlobalSession, sourceLanguage: SourceLanguage, preludeText: cstring),
+		getLanguagePrelude                : proc "stdcall"(this: ^IGlobalSession, sourceLanguage: SourceLanguage, outPrelude: ^^IBlob),
+		createCompilerRequest             : proc "stdcall"(this: ^IGlobalSession, outCompilerRequest: ^^ICompileRequest) -> Result, /* [deprecated] */ 
+		addBuiltins                       : proc "stdcall"(this: ^IGlobalSession, sourcePath: cstring, sourceString: cstring),
+		setSharedLibraryLoader            : proc "stdcall"(this: ^IGlobalSession, loader: ^ISharedLibraryLoader),
+		getSharedLibraryLoader            : proc "stdcall"(this: ^IGlobalSession) -> ^ISharedLibraryLoader,
+		checkCompileTargetSupport         : proc "stdcall"(this: ^IGlobalSession, target: CompileTarget) -> Result,
+		checkPassThroughSupport           : proc "stdcall"(this: ^IGlobalSession, passThrough: PassThrough) -> Result,
+		compileCoreModule                 : proc "stdcall"(this: ^IGlobalSession, flags: CompileCoreModuleFlags) -> Result,
+		loadCoreModule                    : proc "stdcall"(this: ^IGlobalSession, coreModule: rawptr, coreModuleSizeInBytes: uint) -> Result,
+		saveCoreModule                    : proc "stdcall"(this: ^IGlobalSession, archiveType: ArchiveType, outBlob: ^^IBlob) -> Result,
+		findCapability                    : proc "stdcall"(this: ^IGlobalSession, name: cstring) -> CapabilityID,
+		setDownstreamCompilerForTransition: proc "stdcall"(this: ^IGlobalSession, source: CompileTarget, target: CompileTarget, compiler: PassThrough),
+		getDownstreamCompilerForTransition: proc "stdcall"(this: ^IGlobalSession, source, target: CompileTarget) -> PassThrough,
+		getCompilerElapsedTime            : proc "stdcall"(this: ^IGlobalSession, outTotalTime, outDownstreamTime: ^f64),
+		setSPIRVCoreGrammar               : proc "stdcall"(this: ^IGlobalSession, jsonPath: cstring) -> Result,
+		parseCommandLineArguments         : proc "stdcall"(this: ^IGlobalSession, argc: i32, argv: [^]cstring, outSessionDesc: ^SessionDesc, outAuxAllocation: ^^IUnknown) -> Result,
+		getSessionDescDigest              : proc "stdcall"(this: ^IGlobalSession, sessionDesc: ^SessionDesc, outBlob: ^^IBlob) -> Result,
+	},
 }
 
 @(link_prefix="slang_")
@@ -455,5 +925,9 @@ foreign libslang {
 	shutdown :: proc() ---
 }
 
+// NOTE(Dragos): sp functions seem to want to become deprecated, but some still exist
+@(link_prefix="sp")
+@(default_calling_convention="c")
+foreign libslang {
 
-
+}
