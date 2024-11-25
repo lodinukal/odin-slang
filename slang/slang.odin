@@ -3,7 +3,7 @@ package slang
 import "core:c"
 
 foreign import libslang "lib/slang.lib"
-foreign import libslangrt "lib/slang-rt.lib"
+//foreign import libslangrt "lib/slang-rt.lib"
 
 // Note(Dragos): This is defined to be "pointer size". So ummmm check later
 Int :: int
@@ -380,7 +380,7 @@ E_TIME_OUT :: #force_inline proc "contextless"() -> i32 { return MAKE_CORE_ERROR
 
 CompilerOptionValue :: struct {
 	kind: CompilerOptionValueKind,
-	intValue: i32,
+	intValue0: i32,
 	intValue1: i32,
 	stringValue0: cstring,
 	stringValue1: cstring,
@@ -644,29 +644,38 @@ SpecializationArg :: struct {
 }
 
 TargetDesc :: struct {
-	
+	structureSize              : uint,
+	format                     : CompileTarget,
+	profile                    : ProfileID,
+	flags                      : TargetFlags,
+	floatingPointMode          : FloatingPointMode,
+	lineDirectiveMode          : LineDirectiveMode,
+	forceGLSLScalarBufferLayout: bool,
+	compilerOptionEntries      : [^]CompilerOptionEntry,
+	compilerOptionEntryCount   : u32,
 }
 
 PreprocessorMacroDesc :: struct {
-
+	name : cstring,
+	value: cstring,
 }
 
 SessionFlags :: enum { }
 
 SessionDesc :: struct {
-	structureSize: uint,
-	targets: [^]TargetDesc,
-	targetCount: Int,
-	flags: SessionFlags,
-	defaultMatrixLayoutMode: MatrixLayoutMode,
-	searchPaths: [^]cstring,
-	searchPathCount: Int,
-	preprocessorMacros: [^]PreprocessorMacroDesc,
-	preprocessorMacroCount: Int,
-	fileSystem: ^IFileSystem,
-	enableEffectAnnotations: bool,
-	allowGLSLSyntax: bool,
-	compilerOptionEntries: [^]CompilerOptionEntry,
+	structureSize           : uint,
+	targets                 : [^]TargetDesc,
+	targetCount             : Int,
+	flags                   : SessionFlags,
+	defaultMatrixLayoutMode : MatrixLayoutMode,
+	searchPaths             : [^]cstring,
+	searchPathCount         : Int,
+	preprocessorMacros      : [^]PreprocessorMacroDesc,
+	preprocessorMacroCount  : Int,
+	fileSystem              : ^IFileSystem,
+	enableEffectAnnotations : bool,
+	allowGLSLSyntax         : bool,
+	compilerOptionEntries   : [^]CompilerOptionEntry,
 	compilerOptionEntryCount: u32,
 }
 
@@ -916,7 +925,7 @@ ISession :: struct #raw_union {
 		getGlobalSession                     : proc "stdcall"(this: ^ISession) -> ^IGlobalSession,
 		loadModule                           : proc "stdcall"(this: ^ISession, moduleName: cstring, outDiagnostics: ^^IBlob) -> ^IModule,
 		loadModuleFromSource                 : proc "stdcall"(this: ^ISession, moduleName: cstring, path: cstring, source: ^IBlob, outDiagnostics: ^^IBlob) -> ^IModule,
-		createCompositeComponentType         : proc "stdcall"(this: ^ISession, componentTypes: [^]^IComponentType, outCompositeComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+		createCompositeComponentType         : proc "stdcall"(this: ^ISession, componentTypes: [^]^IComponentType, componentTypeCount: Int, outCompositeComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
 		specializeType                       : proc "stdcall"(this: ^ISession, type: ^TypeReflection, specializationArgs: [^]SpecializationArg, specializationArgCount: Int, outDiagnostics: ^^IBlob) -> ^TypeReflection,
 		getTypeLayout                        : proc "stdcall"(this: ^ISession, type: ^TypeReflection, targetIndex: Int, rules: LayoutRules, outDiagnostics: ^^IBlob) -> ^TypeLayoutReflection,
 		getContainerType                     : proc "stdcall"(this: ^ISession, elementType: ^TypeReflection, containerType: ContainerType, outDiagnostics: ^^IBlob) -> ^TypeReflection,
