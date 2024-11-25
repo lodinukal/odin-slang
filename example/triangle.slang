@@ -34,6 +34,5 @@ struct PSOutput {
 PSOutput fragment(V2P input) {
     PSOutput output;
     output.frag_color = float4(input.color, 1.0);
-
     return output;
 }
