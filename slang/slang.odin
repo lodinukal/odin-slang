@@ -391,10 +391,6 @@ CompilerOptionEntry :: struct {
 	value: CompilerOptionValue,
 }
 
-IUnknown_VTable :: struct {
-	
-}
-
 UUID :: struct {
 	data1: u32,
 	data2: u16,
@@ -403,30 +399,40 @@ UUID :: struct {
 }
 
 IUnknown :: struct {
-	using vtable: ^struct {
-		queryInterface: proc "stdcall" (this: ^IUnknown, #by_ptr uuid: UUID, outObject: ^rawptr) -> Result,
-		addRef:         proc "stdcall" (this: ^IUnknown) -> u32,
-		release:        proc "stdcall" (this: ^IUnknown) -> u32,
-	},
+	using vtable: ^IUnknown_VTable,
+}
+
+IUnknown_VTable :: struct {
+	queryInterface: proc "stdcall" (this: ^IUnknown, #by_ptr uuid: UUID, outObject: ^rawptr) -> Result,
+	addRef        : proc "stdcall" (this: ^IUnknown) -> u32,
+	release       : proc "stdcall" (this: ^IUnknown) -> u32,
+
 }
 
 ICastable :: struct #raw_union {
 	#subtype iunknown: IUnknown,
-	using vtable: ^struct {
-		castAs: proc "stdcall" (this: ^ICastable, #by_ptr guid: UUID) -> rawptr,
-	},
+	using vtable: ^ICastable_VTable,
+}
+
+ICastable_VTable :: struct {
+	using iunknown_vtable: IUnknown_VTable,
+	castAs: proc "stdcall" (this: ^ICastable, #by_ptr guid: UUID) -> rawptr,
 }
 
 IClonable :: struct #raw_union {
 	#subtype icastable: ICastable,
-	using vtable: ^struct {
-		clone: proc "stdcall" (this: ^IClonable, #by_ptr guid: UUID) -> rawptr,
-	},
+	using vtable: ^IClonable_VTable,
+}
+
+IClonable_VTable :: struct {
+	using icastable_vtable: ICastable_VTable,
+	clone: proc "stdcall" (this: ^IClonable, #by_ptr guid: UUID) -> rawptr,
 }
 
 IBlob :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		getBufferPointer: proc "stdcall"(this: ^IBlob) -> rawptr,
 		getBufferSize   : proc "stdcall"(this: ^IBlob) -> uint,
 	},
@@ -434,9 +440,12 @@ IBlob :: struct #raw_union {
 
 IFileSystem :: struct #raw_union {
 	#subtype icastable: ICastable,
-	using vtable: ^struct {
-		loadFile: proc "stdcall"(this: ^IFileSystem, path: cstring) -> Result,
-	}
+	using vtable: ^IFileSystem_VTable,
+}
+
+IFileSystem_VTable :: struct {
+	using icastable_vtable: ICastable_VTable,
+	loadFile: proc "stdcall"(this: ^IFileSystem, path: cstring) -> Result,
 }
 
 // Todo(Dragos): Should this be a rawptr?
@@ -446,6 +455,7 @@ FuncPtr :: #type proc "c"()
 ISharedLibrary :: struct #raw_union {
 	#subtype icastable: ICastable,
 	using vtable: ^struct {
+		using icastable_vtable: ICastable_VTable,
 		findSymbolByName: proc "stdcall" (this: ^IFileSystem, name: cstring) -> rawptr,
 	},
 }
@@ -453,6 +463,7 @@ ISharedLibrary :: struct #raw_union {
 ISharedLibraryLoader :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		loadSharedLibrary: proc "stdcall" (this: ^ISharedLibraryLoader, path: cstring, sharedLibraryOut: ^^ISharedLibrary) -> Result,
 	},
 }
@@ -480,19 +491,23 @@ PathKind :: enum {
 // TODO(Dragos): should we replace #subtype with using?
 IFileSystemExt :: struct #raw_union {
 	#subtype ifilesystem: IFileSystem,
-	using vtable: ^struct {
-		getFileUniqueIdentity: proc "stdcall"(this: ^IFileSystemExt, path: cstring, outUniqueIdentity: ^^IBlob) -> Result,
-		calcCombinedPath     : proc "stdcall"(this: ^IFileSystemExt, fromPath, path: cstring, pathOut: ^^IBlob) -> Result,
-		getPathType          : proc "stdcall"(this: ^IFileSystemExt, path: cstring, pathTypeOut: ^PathType) -> Result,
-		getPath              : proc "stdcall"(this: ^IFileSystemExt, path: cstring, outPath: ^^IBlob) -> Result,
-		enumeratePathContents: proc "stdcall"(this: ^IFileSystemExt, path: cstring, callback: FileSystemContentsCallback, userData: rawptr) -> Result,
-		getOSPathKind        : proc "stdcall"(this: ^IFileSystemExt) -> OSPathKind,
-	},
+	using vtable: ^IFileSystemExt_VTable,
+}
+
+IFileSystemExt_VTable :: struct {
+	using ifilesystem_vtable: IFileSystem_VTable,
+	getFileUniqueIdentity: proc "stdcall"(this: ^IFileSystemExt, path: cstring, outUniqueIdentity: ^^IBlob) -> Result,
+	calcCombinedPath     : proc "stdcall"(this: ^IFileSystemExt, fromPath, path: cstring, pathOut: ^^IBlob) -> Result,
+	getPathType          : proc "stdcall"(this: ^IFileSystemExt, path: cstring, pathTypeOut: ^PathType) -> Result,
+	getPath              : proc "stdcall"(this: ^IFileSystemExt, path: cstring, outPath: ^^IBlob) -> Result,
+	enumeratePathContents: proc "stdcall"(this: ^IFileSystemExt, path: cstring, callback: FileSystemContentsCallback, userData: rawptr) -> Result,
+	getOSPathKind        : proc "stdcall"(this: ^IFileSystemExt) -> OSPathKind,
 }
 
 IMutableFileSystem :: struct #raw_union {
 	#subtype ifilesystext: IFileSystemExt,
 	using vtable: ^struct {
+		using ifilesystemext_vtable: IFileSystemExt_VTable,
 		saveFile       : proc "stdcall"(this: ^IMutableFileSystem, path: cstring, data: rawptr, size: uint) -> Result,
 		saveFileBlob   : proc "stdcall"(this: ^IMutableFileSystem, path: cstring, dataBlob: ^IBlob) -> Result,
 		remove         : proc "stdcall"(this: ^IMutableFileSystem, path: cstring) -> Result,
@@ -514,6 +529,7 @@ WriterMode :: enum u32 {
 IWriter :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		beginAppendBuffer: proc "stdcall"(this: ^IWriter, maxNumChars: uint) -> [^]byte,
 		endAppendBuffer  : proc "stdcall"(this: ^IWriter, buffer: [^]byte, numChars: uint) -> Result,
 		write            : proc "stdcall"(this: ^IWriter, chars: [^]byte, numChars: uint) -> Result,
@@ -526,6 +542,7 @@ IWriter :: struct #raw_union {
 IProfiler :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		getEntryCount: proc "stdcall"(this: ^IProfiler) -> uint,
 		getEntryName: proc "stdcall"(this: ^IProfiler, index: u32) -> cstring,
 		getEntryTimeMS: proc "stdcall"(this: ^IProfiler, index: u32) -> c.long,
@@ -552,38 +569,46 @@ DeclReflection :: struct {
 
 IComponentType :: struct #raw_union {
 	#subtype iunknown: ^IUnknown,
-	using vtable: ^struct {
-		getSession                 : proc "stdcall"(this: ^IComponentType) -> ^ISession,
-		getLayout                  : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outDiagnostics: ^^IBlob) -> ^ProgramLayout,
-		getSpecializationParamCount: proc "stdcall"(this: ^IComponentType) -> Int,
-		getEntryPointCode          : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
-		getResultAsFileSystem      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outFileSystem: ^^IMutableFileSystem) -> Result,
-		getEntryPointHash          : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: Int, outHash: ^^IBlob),
-		specialize                 : proc "stdcall"(this: ^IComponentType, specializationArgs: [^]SpecializationArg, specializationArgCount: Int, outSpecializedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
-		link                       : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
-		getEntryPointHostCallable  : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: i32, outSharedLibrary: ^^ISharedLibrary, outDiagnostics: ^^IBlob) -> Result,
-		renameEntryPoint           : proc "stdcall"(this: ^IComponentType, newName: cstring, outEntryPoint: ^^IComponentType) -> Result,
-		linkWithOptions            : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, compilerOptionEntryCount: u32, compilerOptionEntries: [^]CompilerOptionEntry, outDiagnostics: ^^IBlob) -> Result,
-		getTargetCode              : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
-		getTargetMetadata          : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
-		getEntryPointMetadata      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
-	},
+	using vtable: ^IComponentType_VTable,
+}
+
+IComponentType_VTable :: struct {
+	using iunknown_vtable: IUnknown_VTable,
+	getSession                 : proc "stdcall"(this: ^IComponentType) -> ^ISession,
+	getLayout                  : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outDiagnostics: ^^IBlob) -> ^ProgramLayout,
+	getSpecializationParamCount: proc "stdcall"(this: ^IComponentType) -> Int,
+	getEntryPointCode          : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
+	getResultAsFileSystem      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outFileSystem: ^^IMutableFileSystem) -> Result,
+	getEntryPointHash          : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: Int, outHash: ^^IBlob),
+	specialize                 : proc "stdcall"(this: ^IComponentType, specializationArgs: [^]SpecializationArg, specializationArgCount: Int, outSpecializedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+	link                       : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, outDiagnostics: ^^IBlob) -> Result,
+	getEntryPointHostCallable  : proc "stdcall"(this: ^IComponentType, entryPointIndex, targetIndex: i32, outSharedLibrary: ^^ISharedLibrary, outDiagnostics: ^^IBlob) -> Result,
+	renameEntryPoint           : proc "stdcall"(this: ^IComponentType, newName: cstring, outEntryPoint: ^^IComponentType) -> Result,
+	linkWithOptions            : proc "stdcall"(this: ^IComponentType, outLinkedComponentType: ^^IComponentType, compilerOptionEntryCount: u32, compilerOptionEntries: [^]CompilerOptionEntry, outDiagnostics: ^^IBlob) -> Result,
+	getTargetCode              : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outCode: ^^IBlob, outDiagnostics: ^^IBlob) -> Result,
+	getTargetMetadata          : proc "stdcall"(this: ^IComponentType, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
+	getEntryPointMetadata      : proc "stdcall"(this: ^IComponentType, entryPointIndex: Int, targetIndex: Int, outMetadata: ^^IMetadata, outDiagnostics: ^^IBlob) -> Result,
 }
 
 IEntryPoint :: struct #raw_union {
 	#subtype icomponenttype: IComponentType,
 	using vtable: ^struct {
+		using icomponenttype_vtable: IComponentType_VTable,
 		getFunctionReflection: proc "stdcall"(this: ^IEntryPoint) -> ^FunctionReflection,
 	},
 }
 
 ITypeConformance :: struct #raw_union {
 	#subtype icomponenttype: IComponentType,
+	using vtable: ^struct {
+		using icomponenttype_vtable: IComponentType_VTable,
+	}
 }
 
 IModule :: struct #raw_union {
 	#subtype icomponenttype: IComponentType,
 	using vtable: ^struct {
+		using icomponenttype_vtable: IComponentType_VTable,
 		findEntryPointByName     : proc "stdcall"(this: ^IModule, name: cstring, outEntryPoint: ^^IEntryPoint) -> Result,
 		getDefinedEntryPointCount: proc "stdcall"(this: ^IModule) -> i32,
 		getDefinedEntryPoint     : proc "stdcall"(this: ^IModule, index: i32, outEntryPoint: ^^IEntryPoint) -> Result,
@@ -604,6 +629,12 @@ SpecializationArgKind :: enum i32 {
 	Type,
 }
 
+SpecializationArg_fromType :: #force_inline proc "contextless"(inType: ^TypeReflection) -> (rs: SpecializationArg) {
+	rs.kind = .Type
+	rs.type = inType
+	return rs
+}
+
 // TODO(Dragos): implement SpecializationArg::fromType
 SpecializationArg :: struct {
 	kind: SpecializationArgKind,
@@ -612,10 +643,34 @@ SpecializationArg :: struct {
 	},
 }
 
+TargetDesc :: struct {
+	
+}
 
-SessionDesc :: struct {
+PreprocessorMacroDesc :: struct {
 
 }
+
+SessionFlags :: enum { }
+
+SessionDesc :: struct {
+	structureSize: uint,
+	targets: [^]TargetDesc,
+	targetCount: Int,
+	flags: SessionFlags,
+	defaultMatrixLayoutMode: MatrixLayoutMode,
+	searchPaths: [^]cstring,
+	searchPathCount: Int,
+	preprocessorMacros: [^]PreprocessorMacroDesc,
+	preprocessorMacroCount: Int,
+	fileSystem: ^IFileSystem,
+	enableEffectAnnotations: bool,
+	allowGLSLSyntax: bool,
+	compilerOptionEntries: [^]CompilerOptionEntry,
+	compilerOptionEntryCount: u32,
+}
+
+
 
 ReflectionGenericArgType :: enum {
 	TYPE,
@@ -857,6 +912,7 @@ ContainerType :: enum {
 ISession :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		getGlobalSession                     : proc "stdcall"(this: ^ISession) -> ^IGlobalSession,
 		loadModule                           : proc "stdcall"(this: ^ISession, moduleName: cstring, outDiagnostics: ^^IBlob) -> ^IModule,
 		loadModuleFromSource                 : proc "stdcall"(this: ^ISession, moduleName: cstring, path: cstring, source: ^IBlob, outDiagnostics: ^^IBlob) -> ^IModule,
@@ -882,6 +938,7 @@ ISession :: struct #raw_union {
 IMetadata :: struct #raw_union {
 	#subtype icastable: ICastable,
 	using vtable: ^struct {
+		using icastable_vtable: ICastable_VTable,
 		isParameterLocationUsed: proc "stdcall"(this: ^IMetadata, category: ParameterCategory, spaceIndex, registerIndex: UInt, outUsed: ^bool) -> Result,
 	},
 }
@@ -889,6 +946,7 @@ IMetadata :: struct #raw_union {
 IGlobalSession :: struct #raw_union {
 	#subtype iunknown: IUnknown,
 	using vtable: ^struct {
+		using iunknown_vtable: IUnknown_VTable,
 		createSession                     : proc "stdcall"(this: ^IGlobalSession, #by_ptr desc: SessionDesc, outSession: ^^ISession) -> Result,
 		findProfile                       : proc "stdcall"(this: ^IGlobalSession, name: cstring) -> ProfileID,
 		setDownstreamCompierPath          : proc "stdcall"(this: ^IGlobalSession, passThrough: PassThrough, path: cstring),
@@ -929,5 +987,6 @@ foreign libslang {
 @(link_prefix="sp")
 @(default_calling_convention="c")
 foreign libslang {
-
+	ReflectionType_GetKind :: proc(type: ^TypeReflection) -> TypeKind ---
+	ReflectionType_GetFieldCount :: proc(type: ^TypeReflection) -> u32 ---
 }
