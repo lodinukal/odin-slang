@@ -1,5 +1,9 @@
 package example
 
+/*
+	Credits go to https://github.com/wrapperup
+*/
+
 import "core:fmt"
 import "core:os"
 import "core:slice"
